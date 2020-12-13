@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from pathlib import Path
 
 def load_data():
@@ -11,9 +12,9 @@ def load_data():
     yTrainPath = Path('data', 'train_labels.csv')
     
     assert all([p.exists() for p in [x0TrainPath, x1TrainPath, x2TrainPath,
-        x0TestPath, x1TestPath, x2TestPath, yTrainPath]), 'Wrong data path.'
+        x0TestPath, x1TestPath, x2TestPath, yTrainPath]]), 'Wrong data path.'
 
-    x0_train = pd.read_csv(x0TrainPath, index_col=0).valaues
+    x0_train = pd.read_csv(x0TrainPath, index_col=0).values
     x1_train = pd.read_csv(x1TrainPath, index_col=0).values
     x2_train = pd.read_csv(x2TrainPath, index_col=0).values
     y_train = pd.read_csv(yTrainPath, index_col=0).values.squeeze()
