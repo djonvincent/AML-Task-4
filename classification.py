@@ -6,7 +6,7 @@ from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.metrics import balanced_accuracy_score, classification_report
 from sklearn.svm import SVC
 from load_data import load_data
-from features import power_features
+from features import power_features, PLF, onset_features
 
 N_SPLITS=3 # 3 subjects in train data
 
@@ -20,11 +20,15 @@ x_train, y_train, x_test = load_data()
 
 def preprocess(x_raw, y, x_test_raw, k_features):
     #FEATURE EXTRACTION
-    print('Extracting features')
-    pf = power_features(x_raw[:,:2])
-    pf_test = power_features(x_test_raw[:,:2])
-    f_train = pf.reshape(-1, 10)
-    f_test = pf_test.reshape(-1, 10)
+    print('extracting features...')
+    pf = power_features(x_raw[:, :2])
+    pf_test = power_features(x_test_raw[:, :2])
+
+    plf = PLF(x_raw[:, :2])
+    plf_test = PLF(x_test_raw[:, :2])
+
+    f_train = np.hstack((pf.reshape(-1, 10), plf.transpose()))
+    f_test = np.hstack((pf_test.reshape(-1, 10), plf_test.transpose()))
 
     #SCALING
     scaler = StandardScaler().fit(f_train)
@@ -68,3 +72,12 @@ else:
     model = SVC(class_weight='balanced', kernel='rbf')
     avg_score = CV_score(x_train, y_train, model, 10)
     print('Average BMAC:', avg_score)
+
+
+def neighborCorrelation(n, df):
+    new_df = np.zeros(df.shape[0])
+    for i, epoch in enumerate(df):
+        if i == 0:
+            new_df[i] = np.concatenate(np.zeros(df.shape[1]), epoch, df[i + 1], axis=None)
+        new_df[i] = np.concatenate(df[i-1], epoch, df[i+1], axis=None)
+    return new_df

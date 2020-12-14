@@ -14,6 +14,7 @@ def load_data():
     assert all([p.exists() for p in [x0TrainPath, x1TrainPath, x2TrainPath,
         x0TestPath, x1TestPath, x2TestPath, yTrainPath]]), 'Wrong data path.'
 
+    print('loading dataframes...')
     x0_train = pd.read_csv(x0TrainPath, index_col=0).values
     x1_train = pd.read_csv(x1TrainPath, index_col=0).values
     x2_train = pd.read_csv(x2TrainPath, index_col=0).values
