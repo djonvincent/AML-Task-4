@@ -18,7 +18,8 @@ def load_data():
     x0_train = pd.read_csv(x0TrainPath, index_col=0).values
     x1_train = pd.read_csv(x1TrainPath, index_col=0).values
     x2_train = pd.read_csv(x2TrainPath, index_col=0).values
-    y_train = pd.read_csv(yTrainPath, index_col=0).values.squeeze()
+    # Labels start at 1
+    y_train = pd.read_csv(yTrainPath, index_col=0).values.squeeze() - 1
     x0_test = pd.read_csv(x0TestPath, index_col=0).values
     x1_test = pd.read_csv(x1TestPath, index_col=0).values
     x2_test = pd.read_csv(x2TestPath, index_col=0).values
