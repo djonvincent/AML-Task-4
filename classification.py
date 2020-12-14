@@ -79,16 +79,3 @@ else:
     avg_score = CV_score(x_train, y_train, model, 10)
     print('Average BMAC:', avg_score)
 
-
-def neighborCorrelation(df):
-    new_df = np.zeros(df.shape)
-    for i, epoch in enumerate(df):
-        if i == 0:
-            new_df[i] = np.convolve()
-
-            new_df[i] = np.avg(epoch, df[i + 1])
-        elif i == len(df) - 1:
-            new_df[i] = np.avg(df[i + -1], epoch)
-        else:
-            new_df[i] = np.avg(df[i + -1], epoch, df[i + 1])
-    return new_df
