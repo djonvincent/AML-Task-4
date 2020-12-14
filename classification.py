@@ -27,8 +27,8 @@ def preprocess(x_raw, y, x_test_raw, k_features):
     plf = PLF(x_raw[:, :2])
     plf_test = PLF(x_test_raw[:, :2])
 
-    f_train = np.hstack((pf.reshape(-1, 10), plf.transpose()))
-    f_test = np.hstack((pf_test.reshape(-1, 10), plf_test.transpose()))
+    f_train = np.hstack((pf.reshape(-1, 10), plf.reshape(plf.shape[0], 1)))
+    f_test = np.hstack((pf_test.reshape(-1, 10), plf_test.reshape(plf_test.shape[0], 1)))
 
     #SCALING
     scaler = StandardScaler().fit(f_train)
