@@ -2,6 +2,7 @@ import numpy as np
 from argparse import ArgumentParser
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold
+from scipy.ndimage.filters import uniform_filter1d
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.metrics import balanced_accuracy_score, classification_report
 from sklearn.svm import SVC
@@ -29,6 +30,11 @@ def preprocess(x_raw, y, x_test_raw, k_features):
 
     f_train = np.hstack((pf.reshape(-1, 10), plf.reshape(plf.shape[0], 1)))
     f_test = np.hstack((pf_test.reshape(-1, 10), plf_test.reshape(plf_test.shape[0], 1)))
+
+    #SMOOTHING
+    n = 7
+    f_train = uniform_filter1d(f_train, axis=0, size=n, mode='nearest')
+    f_test = uniform_filter1d(f_test, axis=0, size=n, mode='nearest')
 
     #SCALING
     scaler = StandardScaler().fit(f_train)
@@ -74,10 +80,15 @@ else:
     print('Average BMAC:', avg_score)
 
 
-def neighborCorrelation(n, df):
-    new_df = np.zeros(df.shape[0])
+def neighborCorrelation(df):
+    new_df = np.zeros(df.shape)
     for i, epoch in enumerate(df):
         if i == 0:
-            new_df[i] = np.concatenate(np.zeros(df.shape[1]), epoch, df[i + 1], axis=None)
-        new_df[i] = np.concatenate(df[i-1], epoch, df[i+1], axis=None)
+            new_df[i] = np.convolve()
+
+            new_df[i] = np.avg(epoch, df[i + 1])
+        elif i == len(df) - 1:
+            new_df[i] = np.avg(df[i + -1], epoch)
+        else:
+            new_df[i] = np.avg(df[i + -1], epoch, df[i + 1])
     return new_df
