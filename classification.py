@@ -7,12 +7,13 @@ from scipy.ndimage.filters import uniform_filter1d
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.metrics import balanced_accuracy_score, classification_report
 from sklearn.svm import SVC
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.decomposition import PCA
-from pystruct.learners import FrankWolfeSSVM
+from pystruct.learners import FrankWolfeSSVM, OneSlackSSVM
 from pystruct.models import ChainCRF
 from pystruct.models import LatentGraphCRF
 from load_data import load_data
-from features import power_features, PLF, onset_features
+from features import power_features, PLF, onset_features, EMG_power
 
 N_SPLITS=3 # 3 subjects in train data
 
@@ -55,20 +56,27 @@ def extract_features(x_raw, x_test_raw):
     onsets = onset_features(x_raw[:,2]).reshape(-1,1)
     onsets_test = onset_features(x_test_raw[:,2]).reshape(-1,1)
 
-    f_train = np.hstack((pf, plf, onsets))
-    f_test = np.hstack((pf_test, plf_test, onsets_test))
+    emg_pow = EMG_power(x_raw[:, 2]).reshape(-1,1)
+    emg_pow_test = EMG_power(x_test_raw[:, 2]).reshape(-1,1)
+
+    f_train = np.hstack((pf, emg_pow, onsets))
+    f_test = np.hstack((pf_test, emg_pow_test, onsets_test))
 
     return f_train, f_test
 
 def preprocess(f_train, y, f_test, k_features=None):
 
-    #SCALING
-    scaler = StandardScaler().fit(f_train)
-    f_train = scaler.transform(f_train)
-    f_test = scaler.transform(f_test)
+    #SCALING - normalise signal powers per subject
+    for i in range(0, f_train.shape[0], 21600):
+        f_train[i:i+21600, :11] = StandardScaler().fit_transform(f_train[i:i+21600, :11])
+    for i in range(0, f_test.shape[0], 21600):
+        f_test[i:i+21600, :11] = StandardScaler().fit_transform(f_test[i:i+21600, :11])
+    scaler = StandardScaler().fit(f_train[:, 11:])
+    f_train[:, 11:] = scaler.transform(f_train[:, 11:])
+    f_test[:, 11:] = scaler.transform(f_test[:, 11:])
 
     #SMOOTHING
-    n = 7
+    n = 9
     f_train = uniform_filter1d(f_train, axis=0, size=n, mode='nearest')
     f_test = uniform_filter1d(f_test, axis=0, size=n, mode='nearest')
 
@@ -84,7 +92,7 @@ def preprocess(f_train, y, f_test, k_features=None):
 
     return f_train, f_test
 
-def CV_score(x, y, model, C, gamma, k_features=None, report=False):
+def CV_score(x, y, model, model_args, k_features=None, report=False):
     kf = KFold(n_splits=N_SPLITS, shuffle=False)
     total_score = 0
     y_pred_all = np.zeros(y.size, dtype=int)
@@ -93,14 +101,14 @@ def CV_score(x, y, model, C, gamma, k_features=None, report=False):
             x[train_idx], y[train_idx], x[test_idx], k_features)
 
         print('Training model')
-        y_pred = model(x_train_kf, y[train_idx], x_test_kf, C, gamma)
+        y_pred = model(x_train_kf, y[train_idx], x_test_kf, model_args)
         y_pred_all[test_idx] = y_pred
         total_score += balanced_accuracy_score(y[test_idx], y_pred)
     if report:
         print(classification_report(y, y_pred_all))
     return total_score/N_SPLITS
 
-def Chain_CRF(x, y, x_test):
+def Chain_CRF(x, y, x_test, model_args):
     # Reshape for CRF
     #svc = SVC(class_weight='balanced', kernel='rbf', decision_function_shape='ovr')
     #svc.fit(x, y)
@@ -109,24 +117,37 @@ def Chain_CRF(x, y, x_test):
     #scaler = StandardScaler().fit(x)
     #x = scaler.transform(x)
     #x_test = scaler.transform(x_test)
+    x = x[:,:10]
+    x_test = x_test[:,:10]
     x = x.reshape(-1, 21600, x.shape[-1])
     x_test = x_test.reshape(-1, 21600, x.shape[-1])
     y = y.reshape(-1, 21600)
-    crf = ChainCRF()
-    ssvm = FrankWolfeSSVM(model=crf, C=1, max_iter=10)
-    ssvm = NSlackSSVM(model=crf, C=0.1, max_iter=10)
+    crf = ChainCRF(directed=True)
+    ssvm = OneSlackSSVM(model=crf, C=model_args['C'], max_iter=model_args['max_iter'])
     ssvm.fit(x, y)
     y_pred = np.array(ssvm.predict(x_test))
     return y_pred.flatten()
 
-def SVM(x, y, x_test, C, gamma):
-    svc = SVC(class_weight='balanced', kernel='rbf', C=C, gamma=gamma)
+def SVM(x, y, x_test, model_args):
+    svc = SVC(class_weight='balanced', kernel='rbf', C=model_args['C'],
+            gamma=model_args['gamma'])
     svc.fit(x, y)
     return svc.predict(x_test)
 
+def GBC(x, y, x_test, model_args):
+    gbc = GradientBoostingClassifier(
+            n_estimators = model_args['n_estimators'],
+            max_depth = model_args['max_depth']
+    )
+    gbc.fit(x, y)
+    return gbc.predict(x_test)
+
 if args.test:
-    x_train, x_test = preprocess(x_train, y_train, x_test)
-    y_pred = np.array(model.predict(x_test)).flatten()
+    f_train, f_test = extract_features(x_train, x_test)
+    f_train, f_test = preprocess(f_train, y_train, f_test)
+    print('Running on test data')
+    y_pred = SVM(f_train, y_train, f_test, {'C': 0.5, 'gamma': 'auto'})
+    #y_pred = Chain_CRF(f_train, y_train, f_test, {'C': 0.01, 'max_iter':1000})
 
     y_pred_ids = np.hstack((
         np.arange(y_pred.size).reshape(-1, 1),
@@ -138,14 +159,23 @@ if args.test:
 elif args.finetune:
     f_train, f_test = extract_features(x_train, x_test)
     scores = []
-    for C in [0.1, 0.5, 1, 5, 10, 20]:
-        for gamma in ['auto', 'scale', 0.1, 0.01]:
+    for C in [0.5, 1, 2, 5, 10]:
+        for gamma in ['scale', 'auto', 0.01, 0.001]:
+            print(C, gamma)
             model = SVM
-            scores.append(CV_score(f_train, y_train, model, C, gamma))
-    np.savetxt(fname='finetuning.csv', header='C,gamma', delimiter=',',
-            X=scores, fmt=['%.1f', '%.3f'], comments='')
+            scores.append(CV_score(f_train, y_train, model, {'C':C, 'gamma':gamma}))
+            print(scores[-1])
+    np.savetxt(fname='finetuning.csv', header='C,gamma,score', delimiter=',',
+            X=scores, fmt=['%.1f', '%.3f', '%.5f'], comments='')
 else:
-    model = SVM
+    #model = GBC
     f_train, f_test = extract_features(x_train, x_test)
-    avg_score = CV_score(f_train, y_train, model)
-    print('Average BMAC:', avg_score)
+    #model_args = {'n_estimators': 200, 'max_depth': 3}
+    model = Chain_CRF
+    for C in [0.005, 0.008, 0.01]:
+        print(C)
+        model_args = {'C': C, 'max_iter': 1000}
+        print(CV_score(f_train, y_train, model, model_args))
+    #model_args = {'C': 0.1, 'max_iter': 100}
+    #avg_score = CV_score(f_train, y_train, model, model_args)
+    #print('Average BMAC:', avg_score)

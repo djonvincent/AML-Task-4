@@ -38,3 +38,6 @@ def onset_features(x):
         onset_freq[i] = np.histogram(onsets, bins=21600)[0]
     return onset_freq.flatten()
 
+# Input is N x 512 matrix
+def EMG_power(x):
+    return np.sum(x*x, axis=1)
