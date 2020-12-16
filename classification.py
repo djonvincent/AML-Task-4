@@ -9,7 +9,7 @@ from sklearn.metrics import balanced_accuracy_score, classification_report
 from sklearn.svm import SVC
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.decomposition import PCA
-from pystruct.learners import FrankWolfeSSVM, OneSlackSSVM
+from pystruct.learners import FrankWolfeSSVM
 from pystruct.models import ChainCRF
 from pystruct.models import LatentGraphCRF
 from load_data import load_data
@@ -76,10 +76,19 @@ def preprocess(f_train, y, f_test, k_features=None):
     f_test[:, 11:] = scaler.transform(f_test[:, 11:])
 
     #SMOOTHING
-    n = 9
+    n = 7
     f_train = uniform_filter1d(f_train, axis=0, size=n, mode='nearest')
     f_test = uniform_filter1d(f_test, axis=0, size=n, mode='nearest')
-
+    '''
+    f_train = np.vstack((
+        np.full((1,f_train.shape[1]), 0), f_train,
+        np.full((1,f_train.shape[1]), 0)))
+    f_train = np.hstack((f_train[:-2], f_train[1:-1], f_train[2:]))
+    f_test = np.vstack((
+        np.full((1,f_test.shape[1]), 0), f_test,
+        np.full((1,f_test.shape[1]), 0)))
+    f_test = np.hstack((f_test[:-2], f_test[1:-1], f_test[2:]))
+    '''
     '''
     pca = PCA(n_components=5)
     pca.fit(f_train[:, :10])
@@ -117,13 +126,13 @@ def Chain_CRF(x, y, x_test, model_args):
     #scaler = StandardScaler().fit(x)
     #x = scaler.transform(x)
     #x_test = scaler.transform(x_test)
-    x = x[:,:10]
-    x_test = x_test[:,:10]
+    x = x[:,:11]
+    x_test = x_test[:,:11]
     x = x.reshape(-1, 21600, x.shape[-1])
     x_test = x_test.reshape(-1, 21600, x.shape[-1])
     y = y.reshape(-1, 21600)
-    crf = ChainCRF(directed=True)
-    ssvm = OneSlackSSVM(model=crf, C=model_args['C'], max_iter=model_args['max_iter'])
+    crf = ChainCRF(directed=False)
+    ssvm = FrankWolfeSSVM(model=crf, C=model_args['C'], max_iter=model_args['max_iter'])
     ssvm.fit(x, y)
     y_pred = np.array(ssvm.predict(x_test))
     return y_pred.flatten()
@@ -147,7 +156,7 @@ if args.test:
     f_train, f_test = preprocess(f_train, y_train, f_test)
     print('Running on test data')
     y_pred = SVM(f_train, y_train, f_test, {'C': 0.5, 'gamma': 'auto'})
-    #y_pred = Chain_CRF(f_train, y_train, f_test, {'C': 0.01, 'max_iter':1000})
+    #y_pred = Chain_CRF(f_train, y_train, f_test, {'C': 0.05, 'max_iter':75})
 
     y_pred_ids = np.hstack((
         np.arange(y_pred.size).reshape(-1, 1),
@@ -168,14 +177,10 @@ elif args.finetune:
     np.savetxt(fname='finetuning.csv', header='C,gamma,score', delimiter=',',
             X=scores, fmt=['%.1f', '%.3f', '%.5f'], comments='')
 else:
-    #model = GBC
+    model = Chain_CRF
     f_train, f_test = extract_features(x_train, x_test)
     #model_args = {'n_estimators': 200, 'max_depth': 3}
-    model = Chain_CRF
-    for C in [0.005, 0.008, 0.01]:
-        print(C)
-        model_args = {'C': C, 'max_iter': 1000}
-        print(CV_score(f_train, y_train, model, model_args))
-    #model_args = {'C': 0.1, 'max_iter': 100}
-    #avg_score = CV_score(f_train, y_train, model, model_args)
-    #print('Average BMAC:', avg_score)
+    for max_iter in [10, 20, 30, 50, 75, 100, 150, 200]:
+        model_args = {'C': 0.05, 'max_iter':max_iter}
+        avg_score = CV_score(f_train, y_train, model, model_args)
+        print('Average BMAC:', avg_score)
