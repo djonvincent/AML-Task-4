@@ -1,181 +1,133 @@
 import numpy as np
 from pathlib import Path
 from argparse import ArgumentParser
+from tensorflow import keras
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import KFold
-from scipy.ndimage.filters import uniform_filter1d
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.metrics import balanced_accuracy_score, classification_report
-from sklearn.svm import SVC
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.decomposition import PCA
-from pystruct.learners import FrankWolfeSSVM, OneSlackSSVM
-from pystruct.models import ChainCRF
-from pystruct.models import LatentGraphCRF
 from load_data import load_data
 from features import power_features, PLF, onset_features, EMG_power
 
 N_SPLITS=3 # 3 subjects in train data
 
 parser = ArgumentParser()
-parser.add_argument('--test', dest='test', action='store_true', default=False)
-parser.add_argument('--finetune', dest='finetune', action='store_true', default=False)
+parser.add_argument('--test', dest='test', default=False)
+parser.add_argument('--predict', dest='predict', default=True)
 args = parser.parse_args()
 
-#DATAFRAME
-x_train, y_train, x_test = load_data()
+def main():
+    #DATAFRAME
+    x_train, y_train, x_test = load_data()
 
-def extract_features(x_raw, x_test_raw):
-    print('extracting features...')
-    PF_path_train = Path('data', 'train_pf.csv')
-    PF_path_test = Path('data', 'test_pf.csv')
-    if PF_path_train.exists():
-        pf = np.loadtxt(PF_path_train, delimiter=',')
-    else:
-        pf = power_features(x_raw[:, :2])
-        np.savetxt(X=pf, fname=PF_path_train, delimiter=',')
-    if PF_path_test.exists():
-        pf_test = np.loadtxt(PF_path_test, delimiter=',')
-    else:
-        pf_test = power_features(x_test_raw[:, :2])
-        np.savetxt(X=pf_test, fname=PF_path_test, delimiter=',')
+    #FFT
+    x_train = fft(x_train)
+    x_test = fft(x_test)
 
-    PLF_path_train = Path('data', 'train_plf.csv')
-    PLF_path_test = Path('data', 'test_plf.csv')
-    if PLF_path_train.exists():
-        plf = np.loadtxt(PLF_path_train, delimiter=',')
-    else:
-        plf = PLF(x_raw[:, :2])
-        np.savetxt(X=plf, fname=PLF_path_train, delimiter=',')
-    if PLF_path_test.exists():
-        plf_test = np.loadtxt(PLF_path_test, delimiter=',')
-    else:
-        plf_test = PLF(x_test_raw[:, :2])
-        np.savetxt(X=plf_test, fname=PLF_path_test, delimiter=',')
+    #RESHAPE
+    x_train = np.reshape(x_train, (x_train.shape[0], -1))
+    x_test = np.reshape(x_test, (x_test.shape[0], -1))
 
-    onsets = onset_features(x_raw[:,2]).reshape(-1,1)
-    onsets_test = onset_features(x_test_raw[:,2]).reshape(-1,1)
+    #ANALYZE
+    class_weights = analyze(y_train)
 
-    emg_pow = EMG_power(x_raw[:, 2]).reshape(-1,1)
-    emg_pow_test = EMG_power(x_test_raw[:, 2]).reshape(-1,1)
+    #SET VAL DATA ASIDE
+    if args.test:
+        x_val = x_train[0:21600, :]
+        y_val = y_train[0:21600]
+        x_train = x_train[21600:, :]
+        y_train = y_train[21600:]
 
-    f_train = np.hstack((pf, emg_pow, onsets))
-    f_test = np.hstack((pf_test, emg_pow_test, onsets_test))
+    #SCALE DATA
+    if args.test:
+        x_train, x_val = scale(x_train, x_val)
+    if args.predict:
+        x_train, x_test = scale(x_train, x_test)
 
-    return f_train, f_test
+    #CREATE SHIFTED DATA
+    x_train_pre = np.concatenate((np.zeros(shape=(1, x_train.shape[1])), x_train[0:-1]), axis=0)
+    x_train_post = np.concatenate((x_train[1:], np.zeros(shape=(1, x_train.shape[1]))), axis=0)
 
-def preprocess(f_train, y, f_test, k_features=None):
+    x_test_pre = np.concatenate((np.zeros(shape=(1, x_train.shape[1])), x_test[0:-1]), axis=0)
+    x_test_post = np.concatenate((x_test[1:], np.zeros(shape=(1, x_train.shape[1]))), axis=0)
 
-    #SCALING - normalise signal powers per subject
-    for i in range(0, f_train.shape[0], 21600):
-        f_train[i:i+21600, :11] = StandardScaler().fit_transform(f_train[i:i+21600, :11])
-    for i in range(0, f_test.shape[0], 21600):
-        f_test[i:i+21600, :11] = StandardScaler().fit_transform(f_test[i:i+21600, :11])
-    scaler = StandardScaler().fit(f_train[:, 11:])
-    f_train[:, 11:] = scaler.transform(f_train[:, 11:])
-    f_test[:, 11:] = scaler.transform(f_test[:, 11:])
+    if args.test:
+        x_val_pre = np.concatenate((np.zeros(shape=(1, x_train.shape[1])), x_val[0:-1]), axis=0)
+        x_val_post = np.concatenate((x_val[1:], np.zeros(shape=(1, x_train.shape[1]))), axis=0)
 
-    #SMOOTHING
-    n = 9
-    f_train = uniform_filter1d(f_train, axis=0, size=n, mode='nearest')
-    f_test = uniform_filter1d(f_test, axis=0, size=n, mode='nearest')
+    NN_model = NN(x_train.shape[1])
 
-    '''
-    pca = PCA(n_components=5)
-    pca.fit(f_train[:, :10])
-    f_train = np.hstack((pca.transform(f_train[:, :10]), f_train[:,10:]))
-    f_test = np.hstack((pca.transform(f_test[:, :10]), f_test[:,10:]))
-    '''
+    if args.test:
+        for i in range(10):
+            NN_model.fit([x_train_pre, x_train, x_train_post], y_train, batch_size=32, epochs=1, class_weight=class_weights)
 
-    #FEATURE SELECTION
-    #x, x_test = kBest(x, y, x_test, f_classif, k_features)
+            y_val_predict = np.argmax(NN_model.predict([x_val_pre, x_val, x_val_post]), axis=1)
+            BMAC = balanced_accuracy_score(y_val, y_val_predict)
+            print('the validation BMAC score is: {}'.format(BMAC))
 
-    return f_train, f_test
+    if args.predict:
+        NN_model.fit([x_train_pre, x_train, x_train_post], y_train, batch_size=32, epochs=1, class_weight=class_weights)
+        y_pred = np.argmax(NN_model.predict([x_test_pre, x_test, x_test_post]), axis=1)
 
-def CV_score(x, y, model, model_args, k_features=None, report=False):
-    kf = KFold(n_splits=N_SPLITS, shuffle=False)
-    total_score = 0
-    y_pred_all = np.zeros(y.size, dtype=int)
-    for train_idx, test_idx in kf.split(x):
-        x_train_kf, x_test_kf = preprocess(
-            x[train_idx], y[train_idx], x[test_idx], k_features)
-
-        print('Training model')
-        y_pred = model(x_train_kf, y[train_idx], x_test_kf, model_args)
-        y_pred_all[test_idx] = y_pred
-        total_score += balanced_accuracy_score(y[test_idx], y_pred)
-    if report:
-        print(classification_report(y, y_pred_all))
-    return total_score/N_SPLITS
-
-def Chain_CRF(x, y, x_test, model_args):
-    # Reshape for CRF
-    #svc = SVC(class_weight='balanced', kernel='rbf', decision_function_shape='ovr')
-    #svc.fit(x, y)
-    #x = svc.decision_function(x)
-    #x_test = svc.decision_function(x_test)
-    #scaler = StandardScaler().fit(x)
-    #x = scaler.transform(x)
-    #x_test = scaler.transform(x_test)
-    x = x[:,:10]
-    x_test = x_test[:,:10]
-    x = x.reshape(-1, 21600, x.shape[-1])
-    x_test = x_test.reshape(-1, 21600, x.shape[-1])
-    y = y.reshape(-1, 21600)
-    crf = ChainCRF(directed=True)
-    ssvm = OneSlackSSVM(model=crf, C=model_args['C'], max_iter=model_args['max_iter'])
-    ssvm.fit(x, y)
-    y_pred = np.array(ssvm.predict(x_test))
-    return y_pred.flatten()
-
-def SVM(x, y, x_test, model_args):
-    svc = SVC(class_weight='balanced', kernel='rbf', C=model_args['C'],
-            gamma=model_args['gamma'])
-    svc.fit(x, y)
-    return svc.predict(x_test)
-
-def GBC(x, y, x_test, model_args):
-    gbc = GradientBoostingClassifier(
-            n_estimators = model_args['n_estimators'],
-            max_depth = model_args['max_depth']
-    )
-    gbc.fit(x, y)
-    return gbc.predict(x_test)
-
-if args.test:
-    f_train, f_test = extract_features(x_train, x_test)
-    f_train, f_test = preprocess(f_train, y_train, f_test)
-    print('Running on test data')
-    y_pred = SVM(f_train, y_train, f_test, {'C': 0.5, 'gamma': 'auto'})
-    #y_pred = Chain_CRF(f_train, y_train, f_test, {'C': 0.01, 'max_iter':1000})
-
-    y_pred_ids = np.hstack((
+        y_pred_ids = np.hstack((
         np.arange(y_pred.size).reshape(-1, 1),
         y_pred.reshape(-1, 1) + 1 # Labels start at 1
-    ))
-    np.savetxt(fname='y_test.csv', header='Id,y', delimiter=',', X=y_pred_ids,
+        ))
+
+        np.savetxt(fname='y_test.csv', header='Id,y', delimiter=',', X=y_pred_ids,
             fmt=['%d', '%d'], comments='')
 
-elif args.finetune:
-    f_train, f_test = extract_features(x_train, x_test)
-    scores = []
-    for C in [0.5, 1, 2, 5, 10]:
-        for gamma in ['scale', 'auto', 0.01, 0.001]:
-            print(C, gamma)
-            model = SVM
-            scores.append(CV_score(f_train, y_train, model, {'C':C, 'gamma':gamma}))
-            print(scores[-1])
-    np.savetxt(fname='finetuning.csv', header='C,gamma,score', delimiter=',',
-            X=scores, fmt=['%.1f', '%.3f', '%.5f'], comments='')
-else:
-    #model = GBC
-    f_train, f_test = extract_features(x_train, x_test)
-    #model_args = {'n_estimators': 200, 'max_depth': 3}
-    model = Chain_CRF
-    for C in [0.005, 0.008, 0.01]:
-        print(C)
-        model_args = {'C': C, 'max_iter': 1000}
-        print(CV_score(f_train, y_train, model, model_args))
-    #model_args = {'C': 0.1, 'max_iter': 100}
-    #avg_score = CV_score(f_train, y_train, model, model_args)
-    #print('Average BMAC:', avg_score)
+
+def fft(data):
+    fft_data = np.abs(np.fft.fft(data))
+    return fft_data
+
+
+def NN(input_shape):
+    print('creating NN')
+    model_input_1 = keras.Input(shape=input_shape)
+    model_input_2 = keras.Input(shape=input_shape)
+    model_input_3 = keras.Input(shape=input_shape)
+
+    model_input = keras.Input(shape=input_shape)
+    x = keras.layers.Dense(4, activation='relu')(model_input)
+    #x = keras.layers.Dropout(0.6)(x)
+    #x = keras.layers.Dense(64, activation='relu')(x)
+    #x = keras.layers.Dropout(0.6)(x)
+    #x = keras.layers.Dense(32, activation='relu')(x)
+    x = keras.layers.Dropout(0.6)(x)
+    output = keras.layers.Dense(3, activation='softmax')(x)
+    model = keras.Model(inputs = model_input, outputs = output)
+    #model.summary()
+
+    output_1 = model(model_input_1)
+    output_2 = model(model_input_2)
+    output_3 = model(model_input_3)
+    output_average = keras.layers.average([output_1, output_2, output_3])
+    neighbour_model = keras.Model(inputs=[model_input_1, model_input_2, model_input_3], outputs=output_average)
+    neighbour_model.summary()
+    neighbour_model.compile(optimizer='adam', loss=keras.losses.SparseCategoricalCrossentropy())
+    #keras.utils.plot_model(neighbour_model, "neighbour_model.png", show_shapes=True)
+    return neighbour_model
+
+
+def analyze(y_train):
+    print('analyzing data...')
+    unique, counts = np.unique(y_train, return_counts=True)
+    print("the samples are distributed in the following way: {}".format(counts))
+    invverse_counts = 1/counts
+    invverse_counts = invverse_counts / np.sqrt(np.sum(invverse_counts**2))
+    class_weights = {0: invverse_counts[0], 1: invverse_counts[1], 2: invverse_counts[2]}
+    return class_weights
+
+
+
+def scale(x_train_raw, x_test_raw):
+    print('scaling data...')
+    scaler = StandardScaler().fit(x_train_raw)
+    x_train = scaler.transform(x_train_raw)
+    x_test = scaler.transform(x_test_raw)
+    return x_train, x_test
+
+
+if __name__ == "__main__":
+    main()
